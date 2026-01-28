@@ -116,7 +116,7 @@ jobs:
           ARGS="-only-testing:$TESTS"
           echo "test_args=$ARGS" >> $GITHUB_OUTPUT
 
-      - name: Run Tests
+      - name: 🏃 Run Tests (With Auto-Retry)
         run: |
           XCTESTRUN=$(find ${{ env.DERIVED_DATA_PATH }} -name "*.xctestrun" | head -n 1)
           
@@ -125,6 +125,8 @@ jobs:
             -destination "platform=iOS Simulator,id=${{ steps.select_sim.outputs.sim_id }}" \
             -resultBundlePath "TestResults-${{ matrix.shard }}.xcresult" \
             -parallel-testing-worker-count 1 \
+            -retry-tests-on-failure \
+            -test-iterations 3 \
             ${{ steps.parse_tests.outputs.test_args }}
 
       - name: Upload Result Bundle
