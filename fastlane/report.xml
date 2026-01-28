@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="fastlane.lanes">
+    
+    
+    
+      
+      <testcase classname="fastlane.lanes" name="0: default_platform" time="0.000148">
+        
+      </testcase>
+    
+      
+      <testcase classname="fastlane.lanes" name="1: Switch to ios ensure_creds_exist lane" time="7.7e-05">
+        
+      </testcase>
+    
+      
+      <testcase classname="fastlane.lanes" name="2: git pull origin main" time="0.765537">
+        
+      </testcase>
+    
+      
+      <testcase classname="fastlane.lanes" name="3: /Users/vlad/Documents/git/testsPOC2/scripts/distribute_accounts.py /Users/vlad/Documents/git/testsPOC2/secure_creds/users_creds.txt /Users/vlad/Documents/git/testsPOC2/scripts/account_distribution.txt" time="0.053272">
+        
+      </testcase>
+    
+      
+      <testcase classname="fastlane.lanes" name="4: scan" time="156.92554">
+        
+      </testcase>
+    
+  </testsuite>
+</testsuites>

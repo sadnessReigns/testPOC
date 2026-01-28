@@ -1,0 +1,147 @@
+default_platform(:ios)
+
+platform :ios do
+
+  ROOT_DIR = `git rev-parse --show-toplevel`.strip
+  
+  PROJECT_FILE = Dir["#{ROOT_DIR}/*.xcodeproj"].first
+  if PROJECT_FILE.nil?
+    UI.user_error!("❌ Could not find an .xcodeproj file in #{ROOT_DIR}")
+  end
+
+  DEVICE_NAME = "iPhone 17 Pro" 
+  SCHEME_NAME = "TestsPOCUITests"
+  
+  CREDS_REPO_URL = "https://github.com/uladzislaum_backbase/user_creds.git"
+  CREDS_BRANCH = "main"
+  
+  CREDS_LOCAL_DIR = "#{ROOT_DIR}/secure_creds"
+  DISTRIBUTION_SCRIPT = "#{ROOT_DIR}/scripts/distribute_accounts.py"
+  DIST_LIST_FILE = "#{ROOT_DIR}/scripts/account_distribution.txt"
+  TEST_LIST_FILE = "#{ROOT_DIR}/testfile.txt"
+
+  desc "Fetch creds, distribute accounts, and run regression tests"
+  lane :regression do |options|
+    
+    timestamp = Time.now.strftime("%Y-%m-%d_%H-%M-%S")
+    output_dir = "#{ROOT_DIR}/fastlane/test_output/#{timestamp}"
+    FileUtils.mkdir_p(output_dir)
+    
+    is_ci = ENV['CI'] == "true"
+    
+    default_workers = is_ci ? 2 : 4
+    
+    worker_count = options[:worker_count] ? options[:worker_count].to_i : default_workers
+
+    UI.message "Environment: #{is_ci ? 'CI Runner' : 'Local Machine (48GB RAM Mode)'}"
+    UI.message "Parallel Workers: #{worker_count}"
+
+    if !is_ci
+      UI.message "[Pre-Flight] Killing old Simulators to free up RAM..."
+      sh("killall Simulator || true") 
+      sh("xcrun simctl shutdown all || true")
+    end
+
+    ensure_creds_exist(
+      repo_url: CREDS_REPO_URL,
+      branch: CREDS_BRANCH,
+      target_dir: CREDS_LOCAL_DIR
+    )
+
+    creds_file_path = "#{CREDS_LOCAL_DIR}/users_creds.txt"
+    unless File.exist?(DISTRIBUTION_SCRIPT) && File.exist?(DIST_LIST_FILE)
+      UI.user_error!("❌ Missing script or file list!")
+    end
+    UI.message "Running distribution script..."
+    sh("#{DISTRIBUTION_SCRIPT} #{creds_file_path} #{DIST_LIST_FILE}")
+
+    xcargs = build_test_args(
+      include: options[:include_tests], 
+      exclude: options[:exclude_tests]
+    )
+
+    UI.message "Launching Raw xcodebuild on #{DEVICE_NAME}..."
+
+    result_bundle_path = "#{output_dir}/TestResults.xcresult"
+    destination_string = "platform=iOS Simulator,name=#{DEVICE_NAME}"
+    
+    command = "xcodebuild test " \
+              "-project \"#{PROJECT_FILE}\" " \
+              "-scheme \"#{SCHEME_NAME}\" " \
+              "-destination \"#{destination_string}\" " \
+              "-resultBundlePath \"#{result_bundle_path}\" " \
+              "-parallel-testing-worker-count #{worker_count} " \
+              "-maximum-concurrent-test-simulator-destinations #{worker_count} " \
+              "#{xcargs}"
+
+    UI.message "Running Command:\n#{command}"
+
+    test_execution_error = nil
+
+    begin
+      Dir.chdir(ROOT_DIR) do
+        sh("set -o pipefail && #{command} | xcpretty")
+      end
+      UI.success "✅ Tests Passed!"
+    rescue => ex
+      UI.error "⚠️ Tests Failed (Capturing error...)"
+      test_execution_error = ex
+    end
+    
+    if !is_ci
+      UI.message "[Post-Flight] Shutting down simulators..."
+      sh("xcrun simctl shutdown all || true")
+    end
+
+    # ----------------------------------------
+    # STEP 6: GENERATE REPORT
+    # ----------------------------------------
+    begin
+      UI.message "Generating HTML Report..."
+      sh("xchtmlreport -r \"#{result_bundle_path}\"")
+      generated_report = "#{output_dir}/index.html"
+      UI.success "Report generated: #{generated_report}"
+      sh("open '#{generated_report}'") unless ENV['CI']
+    rescue => report_ex
+      UI.important("⚠️ Report generation failed: #{report_ex}")
+    end
+
+    if test_execution_error
+      UI.user_error!("❌ Regression finished with failures.")
+    end
+  end
+
+  # ... (Helper lanes remain the same) ...
+  private_lane :ensure_creds_exist do |options|
+    target_dir = options[:target_dir]
+    repo_url = options[:repo_url]
+    if ENV['CI']
+      token = ENV['CREDS_REPO_TOKEN']
+      UI.user_error!("❌ CI Token Missing") if token.nil? || token.empty?
+      repo_url = repo_url.gsub("https://", "https://#{token}@")
+    end
+    if Dir.exist?(target_dir)
+      Dir.chdir(target_dir) { sh("git pull origin #{options[:branch]}") }
+    else
+      sh("git clone --branch #{options[:branch]} #{repo_url} #{target_dir}")
+    end
+  end
+
+  def build_test_args(include:, exclude:)
+    args = []
+    if include
+      include.split(',').each { |t| args << "-only-testing:#{t.strip}" }
+    end
+    if exclude
+      exclude.split(',').each { |t| args << "-skip-testing:#{t.strip}" }
+    end
+    if args.empty? && File.exist?(TEST_LIST_FILE)
+      File.readlines(TEST_LIST_FILE).each do |line|
+        next if line.strip.empty?
+        args << "-only-testing:#{line.strip}"
+      end
+    end
+    return args.join(" ")
+  end
+
+end

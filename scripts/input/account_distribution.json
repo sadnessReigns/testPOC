@@ -1,0 +1,33 @@
+{
+    "shard_1": {
+        "user": "User1",
+        "tests": [
+            "TestsPOCUITests/Journey1UITest",
+            "TestsPOCUITests/Journey2UITest",
+            "TestsPOCUITests/Journey3UITest",
+            "TestsPOCUITests/Journey4UITest"
+        ]
+    },
+    "shard_2": {
+        "user": "User2",
+        "tests": [
+            "TestsPOCUITests/Journey5UITest",
+            "TestsPOCUITests/Journey6UITest"
+        ]
+    },
+    "shard_3": {
+        "user": "User3",
+        "tests": [
+            "TestsPOCUITests/Journey7UITest",
+            "TestsPOCUITests/Journey8UITest",
+            "TestsPOCUITests/Journey9UITest"
+        ]
+    },
+    "shard_4": {
+        "user": "User4",
+        "tests": [
+            "TestsPOCUITests/Journey10UITest",
+            "TestsPOCUITests/Journey11UITest"
+        ]
+    }
+}

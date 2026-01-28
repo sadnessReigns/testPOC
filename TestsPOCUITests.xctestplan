@@ -1,0 +1,25 @@
+{
+  "configurations" : [
+    {
+      "id" : "48EC0E7F-844F-47B0-A848-F2CFA7D94CC4",
+      "name" : "Configuration 1",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "testExecutionOrdering" : "random"
+  },
+  "testTargets" : [
+    {
+      "parallelizable" : true,
+      "target" : {
+        "containerPath" : "container:TestsPOC.xcodeproj",
+        "identifier" : "F5964B372F17A7DF000D6342",
+        "name" : "TestsPOCUITests"
+      }
+    }
+  ],
+  "version" : 1
+}

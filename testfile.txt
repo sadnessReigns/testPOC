@@ -1,0 +1,4 @@
+TestsPOCUITests/Journey2UITest/testAnother
+TestsPOCUITests/Journey2UITest/testOneMore
+TestsPOCUITests/Journey4UITest
+TestsPOCUITests/Journey3UITest
