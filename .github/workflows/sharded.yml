@@ -1,0 +1,149 @@
+name: iOS E2E Sharded Regression
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [ main ]
+
+env:
+  PROJECT_NAME: "TestsPOC.xcodeproj" 
+  SCHEME_NAME: "TestsPOCUITests"
+  DIST_JSON_PATH: "scripts/input/account_distribution.json"
+  DERIVED_DATA_PATH: "DerivedData"
+
+jobs:
+  prepare-shards:
+    runs-on: ubuntu-latest
+    outputs:
+      shard_matrix: ${{ steps.set-matrix.outputs.shards }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - id: set-matrix
+        name: Extract Shard Keys
+        run: |
+          SHARDS=$(jq -c 'keys' ${{ env.DIST_JSON_PATH }})
+          echo "Found shards: $SHARDS"
+          echo "shards=$SHARDS" >> $GITHUB_OUTPUT
+
+  build-for-testing:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build for Testing
+        run: |
+          xcodebuild build-for-testing \
+            -project "${{ env.PROJECT_NAME }}" \
+            -scheme "${{ env.SCHEME_NAME }}" \
+            -destination "platform=iOS Simulator,name=iPhone 16" \
+            -derivedDataPath "${{ env.DERIVED_DATA_PATH }}"
+
+      - name: Patch .xctestrun for Relative Paths
+        run: |
+          # Find the .xctestrun file
+          XCTESTRUN_FILE=$(find ${{ env.DERIVED_DATA_PATH }} -name "*.xctestrun" | head -n 1)
+          
+          echo "Patching $XCTESTRUN_FILE..."
+          
+          # Get the current absolute path of the workspace (e.g. /Users/runner/work/repo/repo)
+          WORK_DIR=$(pwd)
+          
+          # Replace the absolute path with a placeholder or simple relative path structure
+          # We replace the specific derived data path with "." so the runner looks in current dir
+          sed -i '' "s|$WORK_DIR/${{ env.DERIVED_DATA_PATH }}/Build/Products|.|g" "$XCTESTRUN_FILE"
+          
+          echo "Patch complete. Paths are now relative to the Products directory."
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-products
+          path: ${{ env.DERIVED_DATA_PATH }}/Build/Products
+          retention-days: 1
+
+  test-shard:
+    needs: [prepare-shards, build-for-testing]
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJson(needs.prepare-shards.outputs.shard_matrix) }}
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-products
+          path: ${{ env.DERIVED_DATA_PATH }}/Build/Products
+
+      - name: Distribute Accounts (Shard ${{ matrix.shard }})
+        run: |
+          chmod +x scripts/distribute_accounts.py
+          python3 scripts/distribute_accounts.py --shard "${{ matrix.shard }}"
+
+      - name: Parse Tests for Shard
+        id: parse_tests
+        run: |
+          TESTS=$(jq -r ".[\"${{ matrix.shard }}\"].tests | join(\" -only-testing:\")" ${{ env.DIST_JSON_PATH }})
+          
+          ARGS="-only-testing:$TESTS"
+          
+          echo "Generated Args: $ARGS"
+          echo "test_args=$ARGS" >> $GITHUB_OUTPUT
+
+      - name: Run Tests (${{ matrix.shard }})
+        run: |
+          XCTESTRUN=$(find ${{ env.DERIVED_DATA_PATH }} -name "*.xctestrun" | head -n 1)
+          
+          xcodebuild test-without-building \
+            -xctestrun "$XCTESTRUN" \
+            -destination "platform=iOS Simulator,name=iPhone 16" \
+            -resultBundlePath "TestResults-${{ matrix.shard }}.xcresult" \
+            -parallel-testing-worker-count 1 \
+            ${{ steps.parse_tests.outputs.test_args }}
+
+      - name: Upload Result Bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: result-${{ matrix.shard }}
+          path: TestResults-${{ matrix.shard }}.xcresult
+
+  report:
+    needs: test-shard
+    if: always()
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download All Results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: result-*
+          merge-multiple: true
+          path: all_results
+
+      - name: Install Tools
+        run: |
+          brew install xcbeautify
+          brew tap titus/xchtmlreport
+          brew install xchtmlreport
+
+      - name: Merge Results & Generate Report
+        run: |
+          mkdir -p Merged.xcresult
+          
+          RESULTS=$(find all_results -name "*.xcresult" | tr '\n' ' ')
+          
+          echo "Generating HTML Report from: $RESULTS"
+          
+          xchtmlreport -r $RESULTS -o index.html
+
+      - name: Upload HTML Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: HTML-Report
+          path: index.html
