@@ -11,10 +11,9 @@ env:
   SCHEME_NAME: "TestsPOCUITests"
   DIST_JSON_PATH: "scripts/input/account_distribution.json"
   DERIVED_DATA_PATH: "DerivedData"
-  TEST_APP_BUNDLE_ID: "rty.TestsPOC" 
+  TEST_APP_BUNDLE_ID: "rty.TestsPOCUITests"
 
 jobs:
-
   prepare-shards:
     name: 🧮 Prepare Shards
     runs-on: ubuntu-latest
@@ -27,7 +26,6 @@ jobs:
         name: 🗝️ Extract Shard Keys
         run: |
           SHARDS=$(jq -c 'keys' ${{ env.DIST_JSON_PATH }})
-          echo "Found shards: $SHARDS"
           echo "shards=$SHARDS" >> $GITHUB_OUTPUT
 
   build-for-testing:
@@ -44,7 +42,7 @@ jobs:
             -destination "generic/platform=iOS Simulator" \
             -derivedDataPath "${{ env.DERIVED_DATA_PATH }}"
 
-      - name: 🩹 Patch .xctestrun for Relative Paths
+      - name: 🩹 Patch .xctestrun
         run: |
           XCTESTRUN_FILE=$(find ${{ env.DERIVED_DATA_PATH }} -name "*.xctestrun" | head -n 1)
           WORK_DIR=$(pwd)
@@ -61,6 +59,7 @@ jobs:
     name: 🧪 Test Shard [${{ matrix.shard }}]
     needs: [prepare-shards, build-for-testing]
     runs-on: macos-latest
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -86,85 +85,58 @@ jobs:
         run: |
           DEVICE_NAME="E2E-Device-${{ matrix.shard }}"
           TARGET_TYPE="iPhone 16"
-          
-          echo "🔧 Managing Simulator: $DEVICE_NAME"
-          
           SIM_ID=$(xcrun simctl list devices available -j | jq -r ".devices | map(.[]) | map(select(.name == \"$DEVICE_NAME\")) | .[0].udid")
           
           if [ -z "$SIM_ID" ] || [ "$SIM_ID" == "null" ]; then
-              echo "🆕 Creating fresh simulator..."
               RUNTIME_ID=$(xcrun simctl list runtimes -j | jq -r '.runtimes | map(select(.name | contains("iOS"))) | sort_by(.version) | reverse | .[0].identifier')
               SIM_ID=$(xcrun simctl create "$DEVICE_NAME" "$TARGET_TYPE" "$RUNTIME_ID")
-              echo "✅ Created: $SIM_ID"
-          else
-              echo "♻️ Found existing: $SIM_ID"
           fi
-          
           echo "sim_id=$SIM_ID" >> $GITHUB_OUTPUT
           
-          echo "🚀 Booting simulator..."
           xcrun simctl boot "$SIM_ID" || true
           
-          echo "⏳ Waiting for Boot..."
           counter=0
           while [ $counter -lt 60 ]; do
               if xcrun simctl list devices | grep "$SIM_ID" | grep -q "Booted"; then
-                  echo "✅ Simulator BOOTED!"
                   break
               fi
               sleep 2
               counter=$((counter+1))
           done
-          
           xcrun simctl spawn "$SIM_ID" defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
 
-      - name: 🔥 Warmup Simulator (Launch Safari & App)
+      - name: 🔥 Warmup Simulator
         run: |
           SIM_ID="${{ steps.select_sim.outputs.sim_id }}"
           
           APP_PATH=$(find ${{ env.DERIVED_DATA_PATH }}/Build/Products -name "*.app" ! -name "*-Runner.app" | head -n 1)
           
           if [ -z "$APP_PATH" ]; then
-            echo "⚠️ Could not find main app to warmup. Checking for Runner..."
-            # Fallback: If no main app (e.g. logic test only), just use whatever .app we find
             APP_PATH=$(find ${{ env.DERIVED_DATA_PATH }}/Build/Products -name "*.app" | head -n 1)
           fi
           
-          if [ -z "$APP_PATH" ]; then
-             echo "❌ Error: Could not find ANY .app file to install!"
-             find ${{ env.DERIVED_DATA_PATH }} -maxdepth 4
-             exit 1
-          fi
-
-          echo "🎯 Found App to Warmup: $APP_PATH"
+          echo "🎯 Warming up: $APP_PATH"
           
-          echo "🏋️‍♀️ 1. Launching Safari to wake up SpringBoard..."
           xcrun simctl launch "$SIM_ID" com.apple.mobilesafari
           sleep 5
-          
-          echo "📦 2. Pre-Installing App to cache signatures..."
           xcrun simctl install "$SIM_ID" "$APP_PATH"
-          
-          echo "🚀 3. Pre-Launching App to break 'First Run' hang..."
           xcrun simctl launch "$SIM_ID" "${{ env.TEST_APP_BUNDLE_ID }}" || true
           sleep 5
           xcrun simctl terminate "$SIM_ID" "${{ env.TEST_APP_BUNDLE_ID }}" || true
-          
-          echo "✅ Simulator Primed!"
 
       - name: 🐍 Distribute Accounts
         run: |
           chmod +x scripts/distribute_accounts.py
           python3 scripts/distribute_accounts.py --shard "${{ matrix.shard }}"
 
-      - name: ⚙️ Parse Tests for Shard
+      - name: ⚙️ Parse Tests
         id: parse_tests
         run: |
           TESTS=$(jq -r ".[\"${{ matrix.shard }}\"].tests | join(\" -only-testing:\")" ${{ env.DIST_JSON_PATH }})
           ARGS="-only-testing:$TESTS"
           echo "test_args=$ARGS" >> $GITHUB_OUTPUT
 
-      - name: 🏃 Run Tests (Fast Mode)
+      - name: 🏃 Run Tests
         run: |
           XCTESTRUN=$(find ${{ env.DERIVED_DATA_PATH }} -name "*.xctestrun" | head -n 1)
           
@@ -177,12 +149,18 @@ jobs:
             -test-iterations 3 \
             ${{ steps.parse_tests.outputs.test_args }}
 
+      - name: 📦 Stage Result Bundle
+        if: always()
+        run: |
+          mkdir -p UploadStaging
+          mv "TestResults-${{ matrix.shard }}.xcresult" UploadStaging/
+          
       - name: 📤 Upload Result Bundle
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: result-${{ matrix.shard }}
-          path: TestResults-${{ matrix.shard }}.xcresult
+          path: UploadStaging/
 
   report:
     name: 📊 Generate HTML Report
@@ -191,10 +169,12 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: 📦 Download All Results
         uses: actions/download-artifact@v4
         with:
           pattern: result-*
+          merge-multiple: true
           path: all_results
 
       - name: 🍺 Install Tools
@@ -203,17 +183,14 @@ jobs:
               brew install xctesthtmlreport
           fi
 
-      - name: 📑 Merge Results & Generate
+      - name: 📑 Generate Report
         run: |
-          cd all_results
-          
-          for dir in result-*; do
-             [ -d "$dir" ] && mv "$dir" "$dir.xcresult"
-          done
-          cd ..
-          
           RESULTS=$(find all_results -name "*.xcresult" | tr '\n' ' ')
-          echo "Merging: $RESULTS"
+          
+          if [ -z "$RESULTS" ]; then
+             echo "❌ No results found!"
+             exit 1
+          fi
           
           xchtmlreport -r $RESULTS -o index.html
 
