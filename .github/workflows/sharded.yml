@@ -1,4 +1,4 @@
-name: iOS E2E Sharded Regression
+name: 🚀 iOS E2E Sharded Regression
 
 on:
   workflow_dispatch:
@@ -7,13 +7,16 @@ on:
     branches: [ main ]
 
 env:
-  PROJECT_NAME: "TestsPOC.xcodeproj" 
+  PROJECT_NAME: "TestsPOC.xcodeproj"
   SCHEME_NAME: "TestsPOCUITests"
   DIST_JSON_PATH: "scripts/input/account_distribution.json"
   DERIVED_DATA_PATH: "DerivedData"
+  TEST_APP_BUNDLE_ID: "rty.TestsPOC" 
 
 jobs:
+
   prepare-shards:
+    name: 🧮 Prepare Shards
     runs-on: ubuntu-latest
     outputs:
       shard_matrix: ${{ steps.set-matrix.outputs.shards }}
@@ -21,17 +24,19 @@ jobs:
       - uses: actions/checkout@v4
       
       - id: set-matrix
-        name: Extract Shard Keys
+        name: 🗝️ Extract Shard Keys
         run: |
           SHARDS=$(jq -c 'keys' ${{ env.DIST_JSON_PATH }})
+          echo "Found shards: $SHARDS"
           echo "shards=$SHARDS" >> $GITHUB_OUTPUT
 
   build-for-testing:
+    name: 🏗️ Build Binary
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build for Testing
+      - name: 🔨 Build for Testing
         run: |
           xcodebuild build-for-testing \
             -project "${{ env.PROJECT_NAME }}" \
@@ -39,13 +44,13 @@ jobs:
             -destination "generic/platform=iOS Simulator" \
             -derivedDataPath "${{ env.DERIVED_DATA_PATH }}"
 
-      - name: Patch .xctestrun for Relative Paths
+      - name: 🩹 Patch .xctestrun for Relative Paths
         run: |
           XCTESTRUN_FILE=$(find ${{ env.DERIVED_DATA_PATH }} -name "*.xctestrun" | head -n 1)
           WORK_DIR=$(pwd)
           sed -i '' "s|$WORK_DIR/${{ env.DERIVED_DATA_PATH }}/Build/Products|.|g" "$XCTESTRUN_FILE"
 
-      - name: Upload Build Artifacts
+      - name: 📤 Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: build-products
@@ -53,6 +58,7 @@ jobs:
           retention-days: 1
 
   test-shard:
+    name: 🧪 Test Shard [${{ matrix.shard }}]
     needs: [prepare-shards, build-for-testing]
     runs-on: macos-latest
     strategy:
@@ -61,15 +67,21 @@ jobs:
         shard: ${{ fromJson(needs.prepare-shards.outputs.shard_matrix) }}
     
     steps:
+      - name: 🧹 Pre-Clean Runner
+        run: |
+          killall Simulator 2> /dev/null || true
+          xcrun simctl shutdown all || true
+          xcrun simctl delete all || true
+
       - uses: actions/checkout@v4
 
-      - name: Download Build Artifacts
+      - name: 📦 Download Build Artifacts
         uses: actions/download-artifact@v4
         with:
           name: build-products
           path: ${{ env.DERIVED_DATA_PATH }}/Build/Products
 
-      - name: 📱 Select or Create Simulator (Smart Boot)
+      - name: 📱 Select or Create Simulator
         id: select_sim
         run: |
           DEVICE_NAME="E2E-Device-${{ matrix.shard }}"
@@ -80,19 +92,12 @@ jobs:
           SIM_ID=$(xcrun simctl list devices available -j | jq -r ".devices | map(.[]) | map(select(.name == \"$DEVICE_NAME\")) | .[0].udid")
           
           if [ -z "$SIM_ID" ] || [ "$SIM_ID" == "null" ]; then
-              echo "🆕 Creating fresh simulator for this shard..."
-              
+              echo "🆕 Creating fresh simulator..."
               RUNTIME_ID=$(xcrun simctl list runtimes -j | jq -r '.runtimes | map(select(.name | contains("iOS"))) | sort_by(.version) | reverse | .[0].identifier')
-              
-              if [ -z "$RUNTIME_ID" ]; then
-                 echo "❌ Error: Could not find any iOS Runtime!"
-                 exit 1
-              fi
-
               SIM_ID=$(xcrun simctl create "$DEVICE_NAME" "$TARGET_TYPE" "$RUNTIME_ID")
               echo "✅ Created: $SIM_ID"
           else
-              echo "♻️ Found existing shard device: $SIM_ID"
+              echo "♻️ Found existing: $SIM_ID"
           fi
           
           echo "sim_id=$SIM_ID" >> $GITHUB_OUTPUT
@@ -100,46 +105,53 @@ jobs:
           echo "🚀 Booting simulator..."
           xcrun simctl boot "$SIM_ID" || true
           
-          echo "⏳ Waiting for Simulator to finish booting..."
-          
+          echo "⏳ Waiting for Boot..."
           counter=0
-          MAX_RETRIES=60 # 60 * 2s = 120 seconds max wait
-          
-          while [ $counter -lt $MAX_RETRIES ]; do
-              STATUS=$(xcrun simctl list devices | grep "$SIM_ID" | grep "Booted")
-              
-              if [ -n "$STATUS" ]; then
-                  echo "✅ Simulator is BOOTED and ready!"
+          while [ $counter -lt 60 ]; do
+              if xcrun simctl list devices | grep "$SIM_ID" | grep -q "Booted"; then
+                  echo "✅ Simulator BOOTED!"
                   break
               fi
-              
-              echo "   ... still booting ($counter/$MAX_RETRIES)"
               sleep 2
               counter=$((counter+1))
           done
           
-          if [ $counter -eq $MAX_RETRIES ]; then
-              echo "❌ Error: Simulator timed out while booting."
-              exit 1
-          fi
-
           xcrun simctl spawn "$SIM_ID" defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
 
+      - name: 🔥 Warmup Simulator (Launch Safari & App)
+        run: |
+          SIM_ID="${{ steps.select_sim.outputs.sim_id }}"
+          APP_PATH=$(find ${{ env.DERIVED_DATA_PATH }}/Build/Products -name "*.app" | head -n 1 | xargs basename)
+          FULL_APP_PATH="${{ env.DERIVED_DATA_PATH }}/Build/Products/$APP_PATH"
+          
+          echo "🏋️‍♀️ 1. Launching Safari to wake up SpringBoard..."
+          xcrun simctl launch "$SIM_ID" com.apple.mobilesafari
           sleep 5
+          
+          echo "📦 2. Pre-Installing App ($APP_PATH) to cache signatures..."
+          xcrun simctl install "$SIM_ID" "$FULL_APP_PATH"
+          
+          echo "🚀 3. Pre-Launching App to break 'First Run' hang..."
 
-      - name: Distribute Accounts
+          xcrun simctl launch "$SIM_ID" "${{ env.TEST_APP_BUNDLE_ID }}" || true
+          sleep 5
+          xcrun simctl terminate "$SIM_ID" "${{ env.TEST_APP_BUNDLE_ID }}" || true
+          
+          echo "✅ Simulator Primed!"
+
+      - name: 🐍 Distribute Accounts
         run: |
           chmod +x scripts/distribute_accounts.py
           python3 scripts/distribute_accounts.py --shard "${{ matrix.shard }}"
 
-      - name: Parse Tests for Shard
+      - name: ⚙️ Parse Tests for Shard
         id: parse_tests
         run: |
           TESTS=$(jq -r ".[\"${{ matrix.shard }}\"].tests | join(\" -only-testing:\")" ${{ env.DIST_JSON_PATH }})
           ARGS="-only-testing:$TESTS"
           echo "test_args=$ARGS" >> $GITHUB_OUTPUT
 
-      - name: 🏃 Run Tests (With Auto-Retry)
+      - name: 🏃 Run Tests (Fast Mode)
         run: |
           XCTESTRUN=$(find ${{ env.DERIVED_DATA_PATH }} -name "*.xctestrun" | head -n 1)
           
@@ -152,7 +164,7 @@ jobs:
             -test-iterations 3 \
             ${{ steps.parse_tests.outputs.test_args }}
 
-      - name: Upload Result Bundle
+      - name: 📤 Upload Result Bundle
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -160,42 +172,39 @@ jobs:
           path: TestResults-${{ matrix.shard }}.xcresult
 
   report:
+    name: 📊 Generate HTML Report
     needs: test-shard
     if: always()
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Download All Results
+      - name: 📦 Download All Results
         uses: actions/download-artifact@v4
         with:
           pattern: result-*
-          merge-multiple: true
           path: all_results
 
-      - name: 🍺 Install Tools (If Missing)
+      - name: 🍺 Install Tools
         run: |
-          if ! command -v xcbeautify &> /dev/null; then
-              echo "Installing xcbeautify..."
-              brew install xcbeautify
-          else
-              echo "✅ xcbeautify is already installed."
-          fi
-
           if ! command -v xchtmlreport &> /dev/null; then
-              echo "Installing xctesthtmlreport..."
               brew install xctesthtmlreport
-          else
-              echo "✅ xchtmlreport is already installed."
           fi
 
-      - name: Merge Results & Generate Report
+      - name: 📑 Merge Results & Generate
         run: |
-          mkdir -p Merged.xcresult
+          cd all_results
+          
+          for dir in result-*; do
+             [ -d "$dir" ] && mv "$dir" "$dir.xcresult"
+          done
+          cd ..
+          
           RESULTS=$(find all_results -name "*.xcresult" | tr '\n' ' ')
+          echo "Merging: $RESULTS"
+          
           xchtmlreport -r $RESULTS -o index.html
 
-      - name: Upload HTML Report
+      - name: 📤 Upload HTML Report
         uses: actions/upload-artifact@v4
         with:
           name: HTML-Report
