@@ -121,18 +121,31 @@ jobs:
       - name: 🔥 Warmup Simulator (Launch Safari & App)
         run: |
           SIM_ID="${{ steps.select_sim.outputs.sim_id }}"
-          APP_PATH=$(find ${{ env.DERIVED_DATA_PATH }}/Build/Products -name "*.app" | head -n 1 | xargs basename)
-          FULL_APP_PATH="${{ env.DERIVED_DATA_PATH }}/Build/Products/$APP_PATH"
+          
+          APP_PATH=$(find ${{ env.DERIVED_DATA_PATH }}/Build/Products -name "*.app" ! -name "*-Runner.app" | head -n 1)
+          
+          if [ -z "$APP_PATH" ]; then
+            echo "⚠️ Could not find main app to warmup. Checking for Runner..."
+            # Fallback: If no main app (e.g. logic test only), just use whatever .app we find
+            APP_PATH=$(find ${{ env.DERIVED_DATA_PATH }}/Build/Products -name "*.app" | head -n 1)
+          fi
+          
+          if [ -z "$APP_PATH" ]; then
+             echo "❌ Error: Could not find ANY .app file to install!"
+             find ${{ env.DERIVED_DATA_PATH }} -maxdepth 4
+             exit 1
+          fi
+
+          echo "🎯 Found App to Warmup: $APP_PATH"
           
           echo "🏋️‍♀️ 1. Launching Safari to wake up SpringBoard..."
           xcrun simctl launch "$SIM_ID" com.apple.mobilesafari
           sleep 5
           
-          echo "📦 2. Pre-Installing App ($APP_PATH) to cache signatures..."
-          xcrun simctl install "$SIM_ID" "$FULL_APP_PATH"
+          echo "📦 2. Pre-Installing App to cache signatures..."
+          xcrun simctl install "$SIM_ID" "$APP_PATH"
           
           echo "🚀 3. Pre-Launching App to break 'First Run' hang..."
-
           xcrun simctl launch "$SIM_ID" "${{ env.TEST_APP_BUNDLE_ID }}" || true
           sleep 5
           xcrun simctl terminate "$SIM_ID" "${{ env.TEST_APP_BUNDLE_ID }}" || true
