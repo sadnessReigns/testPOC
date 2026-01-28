@@ -151,8 +151,7 @@ jobs:
       - name: Install Tools
         run: |
           brew install xcbeautify
-          brew tap titus/xchtmlreport
-          brew install xchtmlreport
+          brew install xctesthtmlreport
 
       - name: Merge Results & Generate Report
         run: |
