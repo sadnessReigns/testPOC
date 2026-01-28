@@ -24,36 +24,26 @@ jobs:
         name: Extract Shard Keys
         run: |
           SHARDS=$(jq -c 'keys' ${{ env.DIST_JSON_PATH }})
-          echo "Found shards: $SHARDS"
           echo "shards=$SHARDS" >> $GITHUB_OUTPUT
 
   build-for-testing:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Build for Testing
         run: |
           xcodebuild build-for-testing \
             -project "${{ env.PROJECT_NAME }}" \
             -scheme "${{ env.SCHEME_NAME }}" \
-            -destination "platform=iOS Simulator,name=iPhone 16" \
+            -destination "generic/platform=iOS Simulator" \
             -derivedDataPath "${{ env.DERIVED_DATA_PATH }}"
 
       - name: Patch .xctestrun for Relative Paths
         run: |
-          # Find the .xctestrun file
           XCTESTRUN_FILE=$(find ${{ env.DERIVED_DATA_PATH }} -name "*.xctestrun" | head -n 1)
-          
-          echo "Patching $XCTESTRUN_FILE..."
-          
-          # Get the current absolute path of the workspace (e.g. /Users/runner/work/repo/repo)
           WORK_DIR=$(pwd)
-          
-          # Replace the absolute path with a placeholder or simple relative path structure
-          # We replace the specific derived data path with "." so the runner looks in current dir
           sed -i '' "s|$WORK_DIR/${{ env.DERIVED_DATA_PATH }}/Build/Products|.|g" "$XCTESTRUN_FILE"
-          
-          echo "Patch complete. Paths are now relative to the Products directory."
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
@@ -79,7 +69,20 @@ jobs:
           name: build-products
           path: ${{ env.DERIVED_DATA_PATH }}/Build/Products
 
-      - name: Distribute Accounts (Shard ${{ matrix.shard }})
+      - name: Select Simulator
+        id: select_sim
+        run: |
+          SIM_ID=$(xcrun simctl list devices available -j | jq -r '.devices | map(.[]) | map(select(.name | contains("iPhone"))) | .[0].udid')
+          
+          if [ -z "$SIM_ID" ] || [ "$SIM_ID" == "null" ]; then
+             echo "Error: No iPhone simulators found on this runner!"
+             exit 1
+          fi
+          
+          echo "sim_id=$SIM_ID" >> $GITHUB_OUTPUT
+          xcrun simctl boot "$SIM_ID" || true
+
+      - name: Distribute Accounts
         run: |
           chmod +x scripts/distribute_accounts.py
           python3 scripts/distribute_accounts.py --shard "${{ matrix.shard }}"
@@ -88,19 +91,16 @@ jobs:
         id: parse_tests
         run: |
           TESTS=$(jq -r ".[\"${{ matrix.shard }}\"].tests | join(\" -only-testing:\")" ${{ env.DIST_JSON_PATH }})
-          
           ARGS="-only-testing:$TESTS"
-          
-          echo "Generated Args: $ARGS"
           echo "test_args=$ARGS" >> $GITHUB_OUTPUT
 
-      - name: Run Tests (${{ matrix.shard }})
+      - name: Run Tests
         run: |
           XCTESTRUN=$(find ${{ env.DERIVED_DATA_PATH }} -name "*.xctestrun" | head -n 1)
           
           xcodebuild test-without-building \
             -xctestrun "$XCTESTRUN" \
-            -destination "platform=iOS Simulator,name=iPhone 16" \
+            -destination "platform=iOS Simulator,id=${{ steps.select_sim.outputs.sim_id }}" \
             -resultBundlePath "TestResults-${{ matrix.shard }}.xcresult" \
             -parallel-testing-worker-count 1 \
             ${{ steps.parse_tests.outputs.test_args }}
@@ -135,11 +135,7 @@ jobs:
       - name: Merge Results & Generate Report
         run: |
           mkdir -p Merged.xcresult
-          
           RESULTS=$(find all_results -name "*.xcresult" | tr '\n' ' ')
-          
-          echo "Generating HTML Report from: $RESULTS"
-          
           xchtmlreport -r $RESULTS -o index.html
 
       - name: Upload HTML Report
