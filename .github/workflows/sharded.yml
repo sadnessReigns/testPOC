@@ -69,39 +69,34 @@ jobs:
           name: build-products
           path: ${{ env.DERIVED_DATA_PATH }}/Build/Products
 
-      - name: Select or Create Simulator
+      - name: 📱 Select or Create Simulator (Unique per Shard)
         id: select_sim
         run: |
-          TARGET_DEVICE="iPhone 16"
+          DEVICE_NAME="E2E-Device-${{ matrix.shard }}"
+          TARGET_TYPE="iPhone 16"
           
-          echo "Looking for existing $TARGET_DEVICE..."
+          echo "🔧 Managing Simulator: $DEVICE_NAME"
           
-          SIM_ID=$(xcrun simctl list devices available -j | jq -r ".devices | map(.[]) | map(select(.name == \"$TARGET_DEVICE\")) | .[0].udid")
+          SIM_ID=$(xcrun simctl list devices available -j | jq -r ".devices | map(.[]) | map(select(.name == \"$DEVICE_NAME\")) | .[0].udid")
           
           if [ -z "$SIM_ID" ] || [ "$SIM_ID" == "null" ]; then
-             echo "⚠️ $TARGET_DEVICE not found. Creating a fresh simulator..."
-             
-             RUNTIME_ID=$(xcrun simctl list runtimes -j | jq -r '.runtimes | map(select(.name | contains("iOS"))) | sort_by(.version) | reverse | .[0].identifier')
-             
-             if [ -z "$RUNTIME_ID" ]; then
-                echo "❌ Error: Could not find any iOS Runtime!"
-                exit 1
-             fi
-             
-             echo "✅ Found Runtime: $RUNTIME_ID"
-             
-             SIM_ID=$(xcrun simctl create "E2E-Shard-Device" "$TARGET_DEVICE" "$RUNTIME_ID")
-             echo "✅ Created new simulator: $SIM_ID"
+              echo "🆕 Creating fresh simulator for this shard..."
+              
+              RUNTIME_ID=$(xcrun simctl list runtimes -j | jq -r '.runtimes | map(select(.name | contains("iOS"))) | sort_by(.version) | reverse | .[0].identifier')
+              
+              SIM_ID=$(xcrun simctl create "$DEVICE_NAME" "$TARGET_TYPE" "$RUNTIME_ID")
+              echo "✅ Created: $SIM_ID"
           else
-             echo "✅ Found existing simulator: $SIM_ID"
+              echo "♻️ Found existing shard device: $SIM_ID"
           fi
           
           echo "sim_id=$SIM_ID" >> $GITHUB_OUTPUT
           
-          echo "Booting simulator..."
           xcrun simctl boot "$SIM_ID" || true
           
-          echo "Waiting for simulator to stabilize..."
+          xcrun simctl spawn "$SIM_ID" defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
+          
+          echo "⏳ Waiting for simulator..."
           sleep 15
 
       - name: Distribute Accounts
