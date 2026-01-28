@@ -148,10 +148,21 @@ jobs:
           merge-multiple: true
           path: all_results
 
-      - name: Install Tools
+      - name: 🍺 Install Tools (If Missing)
         run: |
-          brew install xcbeautify
-          brew install xctesthtmlreport
+          if ! command -v xcbeautify &> /dev/null; then
+              echo "Installing xcbeautify..."
+              brew install xcbeautify
+          else
+              echo "✅ xcbeautify is already installed."
+          fi
+
+          if ! command -v xchtmlreport &> /dev/null; then
+              echo "Installing xctesthtmlreport..."
+              brew install xctesthtmlreport
+          else
+              echo "✅ xchtmlreport is already installed."
+          fi
 
       - name: Merge Results & Generate Report
         run: |
